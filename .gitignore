@@ -9,3 +9,6 @@
 *.tfstate
 *.tfstate.*
 *.tfvars
+
+# go
+vendor/
