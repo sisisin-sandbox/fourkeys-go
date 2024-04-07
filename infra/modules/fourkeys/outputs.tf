@@ -7,9 +7,9 @@ output "event_handler_secret" {
   sensitive = true
 }
 
-output "dashboard_endpoint" {
-  value = try(google_cloud_run_service.dashboard[0].status[0]["url"], "")
-}
+# output "dashboard_endpoint" {
+#   value = try(google_cloud_run_service.dashboard[0].status[0]["url"], "")
+# }
 
 output "fourkeys_service_account_email" {
   value = google_service_account.fourkeys.email

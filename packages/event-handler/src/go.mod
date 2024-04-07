@@ -1,13 +1,17 @@
 module github.com/sisisin-sandbox/fourkeys-go/event-handler
 
-go 1.21.2
+go 1.21.6
+
+require (
+	cloud.google.com/go/pubsub v1.36.2
+	github.com/sisisin-sandbox/fourkeys-go/shared v0.0.0-00010101000000-000000000000
+)
 
 require (
 	cloud.google.com/go v0.112.0 // indirect
 	cloud.google.com/go/compute v1.24.0 // indirect
 	cloud.google.com/go/compute/metadata v0.2.3 // indirect
 	cloud.google.com/go/iam v1.1.6 // indirect
-	cloud.google.com/go/pubsub v1.36.2 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
@@ -37,3 +41,5 @@ require (
 	google.golang.org/grpc v1.61.1 // indirect
 	google.golang.org/protobuf v1.32.0 // indirect
 )
+
+replace github.com/sisisin-sandbox/fourkeys-go/shared => ../../shared
