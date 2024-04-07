@@ -3,3 +3,9 @@
 .out
 
 .envrc.local
+
+# tf
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars

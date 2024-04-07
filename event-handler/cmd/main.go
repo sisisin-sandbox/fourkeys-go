@@ -5,7 +5,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/hex"
-	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -119,12 +118,13 @@ func publishToPubsub(ctx context.Context, source eventSource, header map[string]
 	if projectID == "" {
 		projectID = pubsub.DetectProjectID
 	}
-	client, err := pubsub.NewClient(ctx, "")
+
+	client, err := pubsub.NewClient(ctx, projectID)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
-	fmt.Println(client.Project())
+
 	return nil
 }
 
