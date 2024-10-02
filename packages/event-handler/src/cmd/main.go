@@ -168,7 +168,13 @@ func indexPost(w http.ResponseWriter, r *http.Request) {
 		pubsubHeaders[k] = v
 	}
 
-	publishToPubsub(r.Context(), authSource, pubsubHeaders, b)
+	logger := shared.LoggerFromContext(r.Context())
+	err = publishToPubsub(r.Context(), authSource, pubsubHeaders, b)
+	if err != nil {
+		logger.Error("error publishing to pubsub", slog.Any("error", err))
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }

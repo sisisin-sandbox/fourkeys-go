@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"regexp"
 	"time"
 
 	"cloud.google.com/go/bigquery"
@@ -43,7 +45,7 @@ func newContext() context.Context {
 func main() {
 	mainContext := newContext()
 
-	http.HandleFunc("/", withLogger(index))
+	http.HandleFunc("/", withLogger(withTraceId(index)))
 
 	logger := shared.LoggerFromContext(mainContext)
 	addr := ":" + envVars.port
@@ -56,6 +58,40 @@ func withLogger(next http.HandlerFunc) http.HandlerFunc {
 		ctx := shared.WithLogger(r.Context())
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}
+}
+
+func withTraceId(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		logger := shared.LoggerFromContext(ctx)
+		traceID, _ := extractTraceID([]byte(r.Header.Get("X-Cloud-Trace-Context")))
+		nextLogger := logger.With(
+			slog.String("logging.googleapis.com/trace", fmt.Sprintf("projects/%s/traces/%s", envVars.projectID, traceID)),
+			slog.String("path", r.URL.Path),
+		)
+		shared.SetLogger(ctx, nextLogger)
+
+		next.ServeHTTP(w, r.WithContext(ctx))
+	}
+}
+
+func extractTraceID(raw []byte) (string, bool) {
+	if (len(raw)) == 0 {
+		return "", false
+	}
+
+	// NOTE: https://cloud.google.com/trace/docs/setup?hl=ja#force-trace
+	matches := regexp.MustCompile(`([a-f\d]+)/([a-f\d]+)`).FindAllSubmatch(raw, -1)
+	if len(matches) != 1 {
+		return "", false
+	}
+
+	sub := matches[0]
+	if len(sub) != 3 {
+		return "", false
+	}
+
+	return string(sub[1]), true
 }
 
 func index(w http.ResponseWriter, r *http.Request) {
@@ -77,8 +113,6 @@ func indexPost(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-
-	logger.Info("received request", slog.String("body", string(body)))
 
 	var msg pubsubRequest
 	err = json.Unmarshal(body, &msg)
@@ -111,22 +145,38 @@ func indexPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logger.Info("parsed request",
-		slog.Any("attrs", attrs),
-		slog.Any("data", metadata),
+	{
+		attrsStr, err := json.Marshal(attrs)
+		if err != nil {
+			logger.Error(fmt.Sprintf("error marshalling attrs: %s", err))
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		metadataStr, err := json.Marshal(metadata)
+		if err != nil {
+			logger.Error(fmt.Sprintf("error marshalling metadata: %s", err))
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		logger.Info("request attr", slog.String("attrs", string(attrsStr)))
+		logger.Info("request metadata", slog.String("metadata", string(metadataStr)))
+	}
+	logger.Info("parsed",
+		slog.Any("attr", attrs),
+		slog.Any("metadata", metadata),
 	)
 
 	event, err := processGithubEvent(r.Context(), msg, attrs, metadata, data)
 	if err != nil {
-		logger.Error(fmt.Sprintf("error processing github event: %s", err))
-		w.WriteHeader(http.StatusInternalServerError)
+		logger.Warn(fmt.Sprintf("error processing github event: %s", err))
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 	if event != nil {
 		err = insertIntoBigQuery(r.Context(), event)
 		if err != nil {
-			logger.Error(fmt.Sprintf("error inserting into bigquery: %s", err))
-			w.WriteHeader(http.StatusInternalServerError)
+			logger.Warn(fmt.Sprintf("error inserting into bigquery: %s", err))
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 	}
@@ -217,6 +267,7 @@ func processGithubEvent(
 	var (
 		maybeTimeCreated, id string
 		tOk, iOk             bool
+		tErr, iErr           error
 	)
 	switch eventType {
 	case "push":
@@ -226,25 +277,41 @@ func processGithubEvent(
 		maybeTimeCreated, tOk = shared.LookupMap[string](metadata, "pull_request", "updated_at")
 		{
 			repoName, rOk := shared.LookupMap[string](metadata, "repository", "name")
-			number, nOk := shared.LookupMap[int](metadata, "number")
+			number, nOk := shared.LookupMap[float64](metadata, "number")
 			if rOk && nOk {
-				id = fmt.Sprintf("%s/%d", repoName, number)
+				id = fmt.Sprintf("%s/%d", repoName, int(number))
 				iOk = true
 			}
 		}
 	case "pull_request_review":
-		maybeTimeCreated, tOk = shared.LookupMap[string](metadata, "review", "submitted_at")
-		id, iOk = shared.LookupMap[string](metadata, "review", "id")
+		maybeTimeCreated, tErr = shared.LookupMapE[string](metadata, "review", "submitted_at")
+		tOk = tErr == nil
+
+		{
+			idNum, nOk := shared.LookupMapE[float64](metadata, "review", "id")
+			if nOk == nil {
+				id = fmt.Sprintf("%d", int(idNum))
+				iOk = true
+			} else {
+				iErr = nOk
+			}
+		}
 	case "pull_request_review_comment":
 		maybeTimeCreated, tOk = shared.LookupMap[string](metadata, "comment", "updated_at")
-		id, iOk = shared.LookupMap[string](metadata, "review", "id")
+		{
+			idNum, nOk := shared.LookupMap[float64](metadata, "review", "id")
+			if nOk {
+				id = fmt.Sprintf("%d", int(idNum))
+				iOk = true
+			}
+		}
 	case "issues":
 		maybeTimeCreated, tOk = shared.LookupMap[string](metadata, "issue", "updated_at")
 		{
 			repoName, rOk := shared.LookupMap[string](metadata, "repository", "name")
-			number, nOk := shared.LookupMap[int](metadata, "issue", "number")
+			number, nOk := shared.LookupMap[float64](metadata, "issue", "number")
 			if rOk && nOk {
-				id = fmt.Sprintf("%s/%d", repoName, number)
+				id = fmt.Sprintf("%s/%d", repoName, int(number))
 				iOk = true
 			}
 		}
@@ -306,8 +373,25 @@ func processGithubEvent(
 	default:
 		return nil, fmt.Errorf("event type %s is not supported", eventType)
 	}
+
 	if !tOk || !iOk {
-		return nil, fmt.Errorf("could not find time_created or id")
+		var errs []error
+		if !tOk {
+			if tErr == nil {
+				errs = append(errs, fmt.Errorf("could not find time_created"))
+			} else {
+				errs = append(errs, tErr)
+			}
+		}
+
+		if !iOk {
+			if iErr == nil {
+				errs = append(errs, fmt.Errorf("could not find id"))
+			} else {
+				errs = append(errs, iErr)
+			}
+		}
+		return nil, errors.Join(errs...)
 	}
 
 	timeCreated, err := time.Parse(time.RFC3339, maybeTimeCreated)
