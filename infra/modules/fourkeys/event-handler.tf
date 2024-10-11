@@ -11,6 +11,15 @@ resource "google_cloud_run_service" "event_handler" {
           name  = "PROJECT_NAME"
           value = var.project_id
         }
+        env {
+          name = "GITHUB_WEBHOOK_SECRET"
+          value_from {
+            secret_key_ref {
+              name = "event-handler"
+              key  = "1"
+            }
+          }
+        }
       }
       service_account_name = google_service_account.fourkeys.email
     }
