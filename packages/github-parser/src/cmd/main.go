@@ -240,6 +240,7 @@ var eventTypes = map[string]bool{
 	"status":                      true,
 	"deployment_status":           true,
 	"release":                     true,
+	"projects_v2_item":            true,
 }
 
 func processGithubEvent(
@@ -370,6 +371,11 @@ func processGithubEvent(
 			}
 		}
 		id, iOk = shared.LookupMap[string](metadata, "release", "id")
+	case "projects_v2_item":
+		maybeTimeCreated, tOk = shared.LookupMap[string](metadata, "projects_v2_item", "updated_at")
+		var itemId float64
+		itemId, iOk = shared.LookupMap[float64](metadata, "projects_v2_item", "id")
+		id = fmt.Sprintf("%d", int(itemId))
 	default:
 		return nil, fmt.Errorf("event type %s is not supported", eventType)
 	}
